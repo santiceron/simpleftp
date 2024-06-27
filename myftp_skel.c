@@ -5,6 +5,8 @@
 #include <stdbool.h>
 #include <unistd.h>
 #include <err.h>
+#include <errno.h>
+#include <sys/stat.h>
 
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -65,7 +67,7 @@ void send_msg(int sd, char *operation, char *param) {
 
     // send command and check for errors
     if(send(sd, buffer, strlen(buffer), 0) == -1){
-        perror("sending command");
+        perror("Error when sending command\n");
         return;
     }
 
@@ -112,7 +114,7 @@ int authenticate(int sd) {
 
     // ask for password
     printf("passwd: ");
-    input = read_input();   //read_input muestra la contraseña, se puede buscar una manera de que la pass no sea visible
+    input = read_input(); 
 
     send_msg(sd, "PASS", input);
 
@@ -130,6 +132,66 @@ int authenticate(int sd) {
     return 0;
 }
 
+int port(int sd) {
+   
+    // new socket for file transmission
+    int new_sd = socket(AF_INET, SOCK_STREAM, 0);
+    if (new_sd < 0) {
+        perror("Error when creating new socket\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // assign a random port
+    struct sockaddr_in data_addr;
+    socklen_t addr_len = sizeof(data_addr);
+    data_addr.sin_family = AF_INET;
+    data_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    data_addr.sin_port = htons(0); 
+
+
+    if (bind(new_sd, (struct sockaddr*)&data_addr, sizeof(data_addr)) < 0) {
+        perror("Error binding to new socket\n");
+        close(new_sd);
+        exit(EXIT_FAILURE);
+    }
+
+    // get assigned port
+    if (getsockname(new_sd, (struct sockaddr*)&data_addr, &addr_len) < 0) {
+        perror("Error getting new socket name\n");
+        close(new_sd);
+        exit(EXIT_FAILURE);
+    }
+
+    unsigned char* ip = (unsigned char*)&data_addr.sin_addr.s_addr;
+    unsigned char* port = (unsigned char*)&data_addr.sin_port;
+
+    char param[BUFSIZE];
+    sprintf(param, "%d,%d,%d,%d,%d,%d", ip[0], ip[1], ip[2], ip[3], ntohs(data_addr.sin_port) / 256, ntohs(data_addr.sin_port) % 256);
+
+    // send port command
+    send_msg(sd, "PORT", param);
+
+    // listen
+    if (listen(new_sd, 1) < 0) {
+        perror("Error listening on new socket\n");
+        close(new_sd);
+        exit(EXIT_FAILURE);
+    }
+    
+    return new_sd;
+}
+
+// Creates the "received" folder if it doesn't exist
+void create_received_folder() {
+    
+    if (mkdir("received", 0777) == -1) {
+        if (errno != EEXIST) {
+            perror("Error creating 'received' folder");
+            exit(EXIT_FAILURE);
+        }
+    }
+}
+
 /**
  * function: operation get
  * sd: socket descriptor
@@ -140,6 +202,11 @@ void get(int sd, char *file_name) {
     int f_size, recv_s, r_size = BUFSIZE;
     FILE *file;
 
+    // send the PORT command to the server
+    int new_sd = port(sd);
+
+    printf("Envie el port command\n");
+
     // send the RETR command to the server
     send_msg(sd, "RETR", file_name);
 
@@ -149,36 +216,51 @@ void get(int sd, char *file_name) {
         return;
     }
 
+    create_received_folder();
+
     // parsing the file size from the answer received
     // "File %s size %ld bytes"
     sscanf(buffer, "File %*s size %d bytes", &f_size);
 
+    char file_path[BUFSIZE];
+    snprintf(file_path, BUFSIZE, "received/%s", file_name);
+
     // open the file to write
-    file = fopen(file_name, "wb");
+    file = fopen(file_path, "w");
 
     if (file == NULL) {
-        perror("Error opening file for writing");
+        perror("Error opening file for writing\n");
+        return;
+    }
+
+    //accepting connection from the server
+    struct sockaddr_in data_addr;
+    socklen_t data_addr_len = sizeof(data_addr);
+    int data_sd = accept(new_sd, (struct sockaddr*)&data_addr, &data_addr_len);
+    if (data_sd < 0) {
+        perror("Error when accepting connection for file transmission\n");
+        fclose(file);
         return;
     }
 
     //receive the file
-    //leer sobre el socket y escribir en el disco hasta que termine de recibir el archivo
-
-    while ((recv_s = recv(sd, buffer, r_size, 0)) > 0) {
-        fwrite(buffer, 1, recv_s, file);
+    while ((recv_s = recv(data_sd, buffer, r_size, 0)) > 0) {
+        fwrite(buffer, sizeof(char), recv_s, file);
     }
 
     if (recv_s < 0) {
-        perror("Error receiving file");
+        perror("Error receiving file\n");
     }   
 
     // close the file
     fclose(file);
 
+    //close data socket
+    close(data_sd);
+
     // receive the OK from the server
-    // codigos ftp en el servidor
-     if (!recv_msg(sd, 226, NULL)) {
-        perror("Error completing file transfer");
+    if (!recv_msg(sd, 226, NULL)) {
+        perror("Error completing file transfer\n");
     }
 }
 
@@ -192,7 +274,7 @@ void quit(int sd) {
 
     // receive the answer from the server
     if(!(recv_msg(sd, 221, NULL))){
-        perror("exiting");
+        perror("Unexpected error when exiting\n");
     }
 
 }
@@ -212,11 +294,11 @@ void operate(int sd) {
         if (input == NULL)
             continue; // avoid empty input
 
-        op = strtok(input, " ");            // strtok investigar: obtiene la primera parte del string hasta encontrar el separador
+        op = strtok(input, " ");            
 
         // free(input);
 
-        if (strcmp(op, "get") == 0) {       // get, quit no son comandos ftp, son comandos de usuario
+        if (strcmp(op, "get") == 0) {      
             param = strtok(NULL, " ");
             get(sd, param);
 
@@ -234,7 +316,7 @@ void operate(int sd) {
 
 int validateIp(char *ip) {
     struct sockaddr_in sa;
-    return inet_pton(AF_INET, ip, &(sa.sin_addr));      // AF_INET indica ipv4, guarda en binario en sa
+    return inet_pton(AF_INET, ip, &(sa.sin_addr));     
 }
 
 int validatePort(char *port) {
@@ -265,7 +347,7 @@ int checkIpAndPort(int argc, char *argv[]){
 int main (int argc, char *argv[]) {
 
     if(argc != 3){
-        perror("Expected ./myftp <SERVER_IP> <SERVER_PORT>");
+        perror("Expected ./myftp <SERVER_IP> <SERVER_PORT>\n");
         return 1;
     }
 
@@ -300,19 +382,14 @@ int main (int argc, char *argv[]) {
         printf(" IP: %s\n", ipstr);
     }
 
-    // create socket and check for errors (llenar la struct addr con la info que obtuve de argc y argv)
-    // usar la documentación, ver como se instancian los 3
-
-    // set socket data
-    // agregar datos adicionales
+    // create socket and check for errors
 
     if((sd = socket(res->ai_family, res->ai_socktype, res->ai_protocol)) == -1){
         perror("Creating socket \n");
         return 1;
     }
 
-    // connect and check for errors
-    // enviar la primitiva connect    
+    // connect and check for errors  
 
     if((connectStatus = connect(sd, res->ai_addr, res->ai_addrlen)) == -1){
         perror("Connecting to socket \n");

@@ -1,0 +1,4 @@
+usuario:pass
+user1:123
+user2:234
+user3:345

@@ -31,7 +31,8 @@
 #define MSG_530 "530 Login incorrect\r\n"
 #define MSG_550 "550 %s: no such file or directory\r\n"
 
-
+// for PORT data connection
+struct sockaddr_in client_info_addr;
 
 /**
  * function: receive the commands from the client
@@ -96,7 +97,7 @@ bool send_ans(int sd, char *message, ...){
 
     // send answer preformated and check errors
     if(send(sd, buffer, BUFSIZE-1, 0) == -1){
-        perror("sending answer to client\n");
+        perror("Could not send answer to client\n");
         return false;
     }
 
@@ -135,10 +136,10 @@ void retr(int sd, char *file_path) {
     char full_path[BUFSIZE];
 
     getcwd(cwd, sizeof(cwd));
-    printf("Directorio actual: %s\n", cwd);
+    printf("Current directory: %s\n", cwd);
 
     if (snprintf(full_path, BUFSIZE, "%s/files/%s", cwd, file_path) >= BUFSIZE) {
-        printf("La ruta del archivo es demasiado larga: %s\n", full_path);
+        printf("File path is too long: %s\n", full_path);
         send_ans(sd, MSG_550, file_path);
         return;
     }
@@ -152,13 +153,13 @@ void retr(int sd, char *file_path) {
     }
 
     if ((file = fopen(full_path, "rb")) == NULL) {
-        perror("Opening file");
+        perror("Error when opening file\n");
         send_ans(sd, MSG_550, file_path);
         return;
     }
 
     if((fsize = getFileSize(full_path)) == -1){
-        perror("Getting file size");
+        perror("Error when getting file size\n");
         fclose(file);
         send_ans(sd, MSG_550, file_path);
         return;
@@ -170,17 +171,37 @@ void retr(int sd, char *file_path) {
     // important delay for avoid problems with buffer size
     sleep(1);
 
+    // new socket
+    int new_sd = socket(AF_INET, SOCK_STREAM, 0);
+    if (new_sd < 0) {
+        perror("Could not create data socket\n");
+        fclose(file);
+        return;
+    }
+
+    // connect
+    if (connect(new_sd, (struct sockaddr*)&client_info_addr, sizeof(client_info_addr)) < 0) {
+        perror("Failed to connect to file transmission socket\n");
+        close(new_sd);
+        fclose(file);
+        return;
+    }
+
     // send the file
-    while ((bread = fread(buffer, 1, BUFSIZE, file)) > 0) {
-        if (send(sd, buffer, bread, 0) == -1) {
-            perror("Sending file");
+    while ((bread = fread(buffer, sizeof(char), BUFSIZE, file)) > 0) {
+        if (send(new_sd, buffer, bread, 0) == -1) {
+            perror("Error when sending file\n");
             fclose(file);
             return;
         }
-    }    
+        sleep(1);
+    }
 
     // close the file
     fclose(file);
+
+    //close new socket
+    close(new_sd);
 
     // send a completed transfer message
     send_ans(sd, MSG_226);
@@ -249,7 +270,7 @@ bool authenticate(int sd) {
 
     // ask for password
     if(!(send_ans(sd, MSG_331, user))){
-        perror("unexpected error requesting password");
+        perror("unexpected error requesting password\n");
         return false;
     }
 
@@ -289,7 +310,7 @@ void operate(int sd) {
             continue;
         }
 
-        if (strcmp(op, "RETRprueba.txt") == 0) {
+        if (strcmp(op, "RETR") == 0) {
             printf("%s\n", param);
             retr(sd, param);
         } else if (strcmp(op, "QUIT") == 0) {
@@ -297,6 +318,24 @@ void operate(int sd) {
             send_ans(sd, MSG_221);
 
             return;
+        } else if(strcmp(op, "PORT") == 0){
+
+            // parsing and saving client data for file transmission
+            struct sockaddr_in client_addr;            
+            unsigned int ip[4], p1, p2;
+
+            sscanf(param, "%u,%u,%u,%u,%u,%u", &ip[0], &ip[1], &ip[2], &ip[3], &p1, &p2);
+
+            char full_ip[16];
+
+            sprintf(full_ip, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+
+            client_addr.sin_family = AF_INET;
+            inet_pton(AF_INET, full_ip, &client_addr.sin_addr);
+            client_addr.sin_port = htons(p1 * 256 + p2);
+
+            // using global variable for saving the data
+            memcpy(&client_info_addr, &client_addr, sizeof(client_addr)); 
         } else {
             // invalid command
             // furute use
@@ -344,13 +383,13 @@ int main (int argc, char *argv[]) {
         // create server socket and check errors
         // creating socket, if error go to the next addr
         if ((master_sd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) {
-            perror("server: socket");
+            perror("Error when creating master socket\n");
             continue;
         }
 
         // for making sure that the port is free, if error exit
         if (setsockopt(master_sd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
-            perror("setsockopt");
+            perror("Error in setsockopt\n");
             exit(1);
         }
 
@@ -358,7 +397,7 @@ int main (int argc, char *argv[]) {
         // binding master socket, if error go to the next addr
         if (bind(master_sd, p->ai_addr, p->ai_addrlen) == -1) {
             close(master_sd);
-            perror("server: bind");
+            perror("Error binding master socket\n");
             continue;
         }
 
@@ -369,14 +408,14 @@ int main (int argc, char *argv[]) {
     freeaddrinfo(res); // all done with this structure
 
     if (p == NULL) {
-        perror("server: failed to bind\n");
+        perror("Failed to establish a socket connection\n");
         exit(1);
     }
 
     // make it listen
     if((listenStatus = listen(master_sd, 5)) == -1){
-        printf("Error setting listen \n");
-        return 1;
+        perror("Error listening\n");
+        exit(1);
     }
 
     printf("server: waiting for connections...\n");
@@ -390,7 +429,7 @@ int main (int argc, char *argv[]) {
         slave_sd = accept(master_sd, (struct sockaddr *)&their_addr, &addr_size);
 
         if(slave_sd == -1){
-            perror("accept");
+            perror("Error when accpeting new connection\n");
             continue;
         }
 
@@ -401,8 +440,9 @@ int main (int argc, char *argv[]) {
 
             // send hello
             if(send(slave_sd, MSG_220, strlen(MSG_220), 0) == -1){
-                perror("sending hello\n");
-                return 1;
+                perror("Error when sending hello\n");
+                close(slave_sd);
+                exit(1);
             }
 
             // operate only if authenticate is true
