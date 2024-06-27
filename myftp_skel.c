@@ -57,17 +57,17 @@ void send_msg(int sd, char *operation, char *param) {
     char buffer[BUFSIZE] = "";
 
     // command formating
-    if (param != NULL)
+    if (param != NULL){
         sprintf(buffer, "%s %s\r\n", operation, param);
-    else
+    } else{
         sprintf(buffer, "%s\r\n", operation);
+    }
 
     // send command and check for errors
     if(send(sd, buffer, strlen(buffer), 0) == -1){
         perror("sending command");
         return;
     }
-
 
 }
 
@@ -154,7 +154,7 @@ void get(int sd, char *file_name) {
     sscanf(buffer, "File %*s size %d bytes", &f_size);
 
     // open the file to write
-    file = fopen(file_name, "w");
+    file = fopen(file_name, "wb");
 
     if (file == NULL) {
         perror("Error opening file for writing");
@@ -217,7 +217,6 @@ void operate(int sd) {
         // free(input);
 
         if (strcmp(op, "get") == 0) {       // get, quit no son comandos ftp, son comandos de usuario
-            printf("Entre en get\n");
             param = strtok(NULL, " ");
             get(sd, param);
 

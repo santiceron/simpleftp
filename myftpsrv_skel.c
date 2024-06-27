@@ -55,7 +55,6 @@ bool recv_cmd(int sd, char *operation, char *param) {
     if (recv_s < 0) warn("error receiving data");
     if (recv_s == 0) errx(1, "connection closed by host");
 
-
     // expunge the terminator characters from the buffer
     buffer[strcspn(buffer, "\r\n")] = 0;
 
@@ -104,36 +103,6 @@ bool send_ans(int sd, char *message, ...){
     return true;
 }
 
-/**
- * function: RETR operation
- * sd: socket descriptor
- * file_path: name of the RETR file
- **/
-
-void retr(int sd, char *file_path) {
-    FILE *file;    
-    int bread;
-    long fsize;
-    char buffer[BUFSIZE];
-    char cwd[1024];
-
-    getcwd(cwd, sizeof(cwd));
-    printf("Directorio actual: %s\n", cwd);
-
-    // check if file exists if not inform error to client
-
-    // send a success message with the file length
-
-    // important delay for avoid problems with buffer size
-    sleep(1);
-
-    // send the file
-
-    // close the file
-
-    // send a completed transfer message
-}
-
 long getFileSize(char *file_path){
     FILE *file = fopen(file_path, "r");
     long size;
@@ -150,6 +119,75 @@ long getFileSize(char *file_path){
 
     return size;
 }
+
+/**
+ * function: RETR operation
+ * sd: socket descriptor
+ * file_path: name of the RETR file
+ **/
+
+void retr(int sd, char *file_path) {
+    FILE *file;    
+    int bread;
+    long fsize;
+    char buffer[BUFSIZE];
+    char cwd[BUFSIZE];
+    char full_path[BUFSIZE];
+
+    getcwd(cwd, sizeof(cwd));
+    printf("Directorio actual: %s\n", cwd);
+
+    if (snprintf(full_path, BUFSIZE, "%s/files/%s", cwd, file_path) >= BUFSIZE) {
+        printf("La ruta del archivo es demasiado larga: %s\n", full_path);
+        send_ans(sd, MSG_550, file_path);
+        return;
+    }
+
+    // check if file exists if not inform error to client
+
+    if (access(full_path, F_OK) == -1) {
+        printf("File not found: %s\n", full_path);
+        send_ans(sd, MSG_550, file_path);
+        return;
+    }
+
+    if ((file = fopen(full_path, "rb")) == NULL) {
+        perror("Opening file");
+        send_ans(sd, MSG_550, file_path);
+        return;
+    }
+
+    if((fsize = getFileSize(full_path)) == -1){
+        perror("Getting file size");
+        fclose(file);
+        send_ans(sd, MSG_550, file_path);
+        return;
+    }
+
+    // send a success message with the file length
+    send_ans(sd, MSG_299, file_path, fsize);
+
+    // important delay for avoid problems with buffer size
+    sleep(1);
+
+    // send the file
+    while ((bread = fread(buffer, 1, BUFSIZE, file)) > 0) {
+        if (send(sd, buffer, bread, 0) == -1) {
+            perror("Sending file");
+            fclose(file);
+            return;
+        }
+    }    
+
+    // close the file
+    fclose(file);
+
+    // send a completed transfer message
+    send_ans(sd, MSG_226);
+
+    return;
+}
+
 
 /**
  * funcion: check valid credentials in ftpusers file
@@ -242,7 +280,8 @@ void operate(int sd) {
     char op[CMDSIZE], param[PARSIZE];
 
     while (true) {
-        op[0] = param[0] = '\0';
+        op[0] = '\0';
+        param[0] = '\0';
         // check for commands send by the client if not inform and exit
 
         if(!recv_cmd(sd, op, param)){
@@ -250,7 +289,7 @@ void operate(int sd) {
             continue;
         }
 
-        if (strcmp(op, "RETR") == 0) {
+        if (strcmp(op, "RETRprueba.txt") == 0) {
             printf("%s\n", param);
             retr(sd, param);
         } else if (strcmp(op, "QUIT") == 0) {
