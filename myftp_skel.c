@@ -21,7 +21,7 @@
 /**
  * function: receive and analize the answer from the server
  * sd: socket descriptor
- * code: three leter numerical code to check if received, le paso el que yo quiero recibir del servidor
+ * code: three leter numerical code to check if received
  * text: normally NULL but if a pointer is received as parameter
  *       then a copy of the optional message from the response
  *       is copied
