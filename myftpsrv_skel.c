@@ -133,6 +133,24 @@ void retr(int sd, char *file_path) {
 
     // send a completed transfer message
 }
+
+long getFileSize(char *file_path){
+    FILE *file = fopen(file_path, "r");
+    long size;
+
+    if(file == NULL){
+        perror("Error when opening the file to get size");
+        return -1;
+    }
+
+    fseek(file, 0, SEEK_END);
+    size = ftell(file);
+
+    fclose(file);
+
+    return size;
+}
+
 /**
  * funcion: check valid credentials in ftpusers file
  * user: login user name
@@ -141,7 +159,7 @@ void retr(int sd, char *file_path) {
  **/
 bool check_credentials(char *user, char *pass) {
     FILE *file;
-    char *path = "./ftpusers.txt", *line = NULL, credentials[100];
+    char *path = "./files/users/ftpusers.txt", *line = NULL, credentials[100];
     size_t line_size = 0;
     bool found = false;
 
@@ -192,7 +210,7 @@ bool authenticate(int sd) {
     }
 
     // ask for password
-    if(!(send_ans(sd, MSG_331))){
+    if(!(send_ans(sd, MSG_331, user))){
         perror("unexpected error requesting password");
         return false;
     }
@@ -226,10 +244,8 @@ void operate(int sd) {
     while (true) {
         op[0] = param[0] = '\0';
         // check for commands send by the client if not inform and exit
-        
-        bool success = recv_cmd(sd, op, param);
 
-        if(!success){
+        if(!recv_cmd(sd, op, param)){
             printf("Error receiving command\n");
             continue;
         }
@@ -241,7 +257,7 @@ void operate(int sd) {
             // send goodbye and close connection
             send_ans(sd, MSG_221);
 
-            break;
+            return;
         } else {
             // invalid command
             // furute use
@@ -340,6 +356,7 @@ int main (int argc, char *argv[]) {
         }
 
         if(!fork()){
+
             // slave socket code, don't need master_sd
             close(master_sd);
 
@@ -355,13 +372,11 @@ int main (int argc, char *argv[]) {
                 operate(slave_sd);
             } else{
                 printf("Wrong username or password\n");
-                close(slave_sd);
-                exit(0);
             }
 
-            
+            // slave work finished, close and exit slave process
             close(slave_sd);
-            break;
+            exit(0);
         }
 
         // master socket code, don't need slave_sd

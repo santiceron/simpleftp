@@ -40,7 +40,7 @@ bool recv_msg(int sd, int code, char *text) {
 
     // parsing the code and message receive from the answer
     sscanf(buffer, "%d %[^\r\n]\r\n", &recv_code, message);
-    printf("%d %s\n", recv_code, message);
+    printf("Server >> %d %s\n", recv_code, message);
     // optional copy of parameters
     if(text) strcpy(text, message);
     // boolean test for the code
@@ -145,13 +145,9 @@ void get(int sd, char *file_name) {
 
     // check for the response (299 OK o 550 not found)
     if(!(recv_msg(sd, 299, NULL))){
-        perror("file not found or not available");
+        printf("File not found or not available: %s\n", buffer);
         return;
     }
-
-    return;
-
-
 
     // parsing the file size from the answer received
     // "File %s size %ld bytes"
@@ -160,17 +156,30 @@ void get(int sd, char *file_name) {
     // open the file to write
     file = fopen(file_name, "w");
 
+    if (file == NULL) {
+        perror("Error opening file for writing");
+        return;
+    }
+
     //receive the file
     //leer sobre el socket y escribir en el disco hasta que termine de recibir el archivo
 
+    while ((recv_s = recv(sd, buffer, r_size, 0)) > 0) {
+        fwrite(buffer, 1, recv_s, file);
+    }
 
+    if (recv_s < 0) {
+        perror("Error receiving file");
+    }   
 
     // close the file
     fclose(file);
 
     // receive the OK from the server
     // codigos ftp en el servidor
-
+     if (!recv_msg(sd, 226, NULL)) {
+        perror("Error completing file transfer");
+    }
 }
 
 /**
@@ -197,7 +206,7 @@ void operate(int sd) {
 
     while (true) {
 
-        printf("Operation: ");
+        printf("Client >> Operation: ");
         input = read_input();
 
         if (input == NULL)
@@ -208,6 +217,7 @@ void operate(int sd) {
         // free(input);
 
         if (strcmp(op, "get") == 0) {       // get, quit no son comandos ftp, son comandos de usuario
+            printf("Entre en get\n");
             param = strtok(NULL, " ");
             get(sd, param);
 
